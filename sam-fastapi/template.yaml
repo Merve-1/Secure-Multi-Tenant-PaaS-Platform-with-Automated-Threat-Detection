@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Multi-Tenant SaaS API
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+    Tracing: Active
+    Tags:
+      Project: multi-tenant-saas
+      Environment: dev
+      Owner: merve
+      CostCenter: learning
+  Api:
+    TracingEnabled: true
+    Tags:
+      Project: multi-tenant-saas
+      Environment: dev
+      Owner: merve
+      CostCenter: learning
+
+Resources:
+  FastApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /saas/dev/fastapi
+      RetentionInDays: 7
+      Tags:
+        - Key: Project
+          Value: multi-tenant-saas
+        - Key: Environment
+          Value: dev
+        - Key: Owner
+          Value: merve
+        - Key: CostCenter
+          Value: learning
+
+  FastApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello_world/
+      Handler: app.handler
+      LoggingConfig:
+        LogFormat: JSON
+        LogGroup: !Ref FastApiLogGroup
+      Events:
+        RootApi:
+          Type: Api
+          Properties:
+            Path: /
+            Method: ANY
+        ProxyApi:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/"
