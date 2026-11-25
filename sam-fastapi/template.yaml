@@ -62,6 +62,10 @@ Resources:
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
+      StageName: $default
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","routeKey":"$context.routeKey","status":"$context.status","responseLength":"$context.responseLength","authorizerError":"$context.authorizer.error","integrationError":"$context.integrationErrorMessage"}'
       DefaultRouteSettings:
         ThrottlingBurstLimit: 20
         ThrottlingRateLimit: 10
@@ -133,6 +137,11 @@ Resources:
             Method: ANY
             Auth:
               Authorizer: CognitoJwt
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /saas/dev/api-access
+      RetentionInDays: 7
 
   UserPool:
     Type: AWS::Cognito::UserPool
