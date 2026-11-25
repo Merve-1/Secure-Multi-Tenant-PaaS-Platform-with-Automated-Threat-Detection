@@ -241,4 +241,9 @@ $RECYCLE.BIN/
 
 */build/*
 
-# End of https://www.gitignore.io/api/osx,linux,python,windows,pycharm,visualstudiocode
+# End of https://www.gitignore.io/api/osx,linux,python,windows,pycharm,visualstudiocode.venv/
+.aws-sam/
+tokens.json
+*.bak
+.env
+__pycache__/

@@ -13,10 +13,10 @@ parallel = true
 lint = true
 
 [default.deploy.parameters]
+tags = "Project=multi-tenant-saas Environment=dev Owner=merve CostCenter=learning"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 resolve_s3 = true
-tags = "Project=multi-tenant-saas Environment=dev Owner=merve CostCenter=learning"
 
 [default.package.parameters]
 resolve_s3 = true

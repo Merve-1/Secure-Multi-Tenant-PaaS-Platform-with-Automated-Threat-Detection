@@ -17,11 +17,6 @@ Globals:
       CostCenter: learning
   Api:
     TracingEnabled: true
-    Tags:
-      Project: multi-tenant-saas
-      Environment: dev
-      Owner: merve
-      CostCenter: learning
 
 Resources:
   FastApiLogGroup:
@@ -39,27 +34,189 @@ Resources:
         - Key: CostCenter
           Value: learning
 
+  MainTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: saas-dev-main
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      Tags:
+        - Key: Project
+          Value: multi-tenant-saas
+        - Key: Environment
+          Value: dev
+        - Key: Owner
+          Value: merve
+        - Key: CostCenter
+          Value: learning
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+      Auth:
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+              audience:
+                - !Ref UserPoolClient
+
   FastApiFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: hello_world/
       Handler: app.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MainTable
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt MainTable.Arn
+                - !Sub "${MainTable.Arn}/index/*"
       LoggingConfig:
         LogFormat: JSON
         LogGroup: !Ref FastApiLogGroup
       Events:
-        RootApi:
-          Type: Api
+        Health:
+          Type: HttpApi
           Properties:
+            ApiId: !Ref HttpApi
+            Path: /health
+            Method: GET
+        Docs:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /docs
+            Method: GET
+        OpenApiSpec:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /openapi.json
+            Method: GET
+        Root:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
             Path: /
             Method: ANY
-        ProxyApi:
-          Type: Api
+            Auth:
+              Authorizer: CognitoJwt
+        Proxy:
+          Type: HttpApi
           Properties:
+            ApiId: !Ref HttpApi
             Path: /{proxy+}
             Method: ANY
+            Auth:
+              Authorizer: CognitoJwt
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: saas-dev-users
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: tenant_id
+          AttributeDataType: String
+          Mutable: true
+      UserPoolTags:
+        Project: multi-tenant-saas
+        Environment: dev
+        Owner: merve
+        CostCenter: learning
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: saas-dev-api-client
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      ReadAttributes:
+        - email
+        - custom:tenant_id
+      WriteAttributes:
+        - email
+
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admin
+      Description: Tenant administrators
+      UserPoolId: !Ref UserPool
+      Precedence: 1
+
+  MemberGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: member
+      Description: Regular tenant members
+      UserPoolId: !Ref UserPool
+      Precedence: 2
+
+  ViewerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: viewer
+      Description: Read-only users
+      UserPoolId: !Ref UserPool
+      Precedence: 3
 
 Outputs:
   ApiUrl:
     Description: API Gateway endpoint URL
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/"
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/"
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Description: Cognito App Client ID
+    Value: !Ref UserPoolClient
+    
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref MainTable
