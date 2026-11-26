@@ -505,5 +505,7 @@ def delete_task(project_id: ProjectId, task_id: TaskId, p: Deleter):
     return Response(status_code=204)
 
 
+
+
 handler = Mangum(app)
 

@@ -1,5 +1,8 @@
 # Multi-Tenant SaaS Platform (Step #01 & Step #02)
 
+- Pick one Region, review pricing, create AWS Budget with alerts ($10/$20/$30/$40/$50), set up an admin user with MFA (not root)
+- Create the SAM project and Git repo, set naming/tagging conventions, write a cleanup checklist, sketch architecture diagram v1
+
 A serverless, multi-tenant SaaS platform built with **Python, FastAPI, AWS Lambda, and AWS SAM**.
 
 > **Current status:** Initial project setup and local FastAPI development completed. The application has not yet been deployed to AWS.

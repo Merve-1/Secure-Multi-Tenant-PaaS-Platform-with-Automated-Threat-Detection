@@ -1,5 +1,8 @@
 # AWS SAM Deployment: Cognito Authentication, FastAPI, and DynamoDB (Step #03 & Step #04)
 
+- Cognito user pool, app client, and groups; test sign-in and token issuance
+- Design DynamoDB keys (tenant ID in the partition key), create HTTP API with Cognito JWT authorizer, first Lambda
+
 ---
 
 ## 1. Configure AWS Credentials
