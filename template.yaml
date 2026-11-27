@@ -112,7 +112,6 @@ Resources:
                 - dynamodb:Query
               Resource:
                 - !GetAtt MainTable.Arn
-                - !Sub "${MainTable.Arn}/index/*"
             - Effect: Allow
               Action: cognito-idp:AdminGetUser
               Resource: !GetAtt UserPool.Arn
