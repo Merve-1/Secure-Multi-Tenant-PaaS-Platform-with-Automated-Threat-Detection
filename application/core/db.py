@@ -7,23 +7,27 @@ Single-table layout (the tenant is always the partition key):
   Project        PK=TENANT#<org>  SK=PROJECT#<project>
   Task           PK=TENANT#<org>  SK=TASK#<project>#<task>
   Audit event    PK=TENANT#<org>  SK=AUDIT#<time>#<id>
+  Pending review PK=TENANT#<org>  SK=PENDING#<submitted_at>#<task>
+  Approval event PK=TENANT#<org>  SK=APPROVAL#<task>#<time>#<id>
 
 This module knows nothing about HTTP routes or users.
 """
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 META = "META"
 PROJECT_PREFIX = "PROJECT#"
 MEMBER_PREFIX = "MEMBER#"
+PENDING_PREFIX = "PENDING#"
 
 
 # --------------------------------------------------------------------------
@@ -71,6 +75,17 @@ def task_key(org_id: str, project_id: str, task_id: str) -> dict:
     return {"PK": tpk(org_id), "SK": f"{task_prefix(project_id)}{task_id}"}
 
 
+def pending_key(org_id: str, submitted_at: str, task_id: str) -> dict:
+    """Queue of tasks waiting for review, oldest first. Lets the approvals list
+    be a single Query with no Scan and no index."""
+    return {"PK": tpk(org_id), "SK": f"{PENDING_PREFIX}{submitted_at}#{task_id}"}
+
+
+def approval_prefix(task_id: str) -> str:
+    """History of approval decisions for one task (task IDs are unique UUIDs)."""
+    return f"APPROVAL#{task_id}#"
+
+
 # --------------------------------------------------------------------------
 # Reads
 # --------------------------------------------------------------------------
@@ -85,11 +100,28 @@ def get_project_or_404(org_id: str, project_id: str) -> dict:
     return item
 
 
+def get_task_or_404(org_id: str, project_id: str, task_id: str) -> dict:
+    item = get_item(task_key(org_id, project_id, task_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return item
+
+
 def has_items(org_id: str, prefix: str) -> bool:
     resp = table().query(
         KeyConditionExpression=Key("PK").eq(tpk(org_id)) & Key("SK").begins_with(prefix),
         Limit=1, ConsistentRead=True)
     return bool(resp["Items"])
+
+
+def find_member_by_email(org_id: str, email: str) -> dict | None:
+    """Find an active-or-not member of THIS organization by email. The query is
+    confined to the organization's partition (at most MAX_MEMBERS_PER_ORG items),
+    so it can never see another tenant."""
+    resp = table().query(
+        KeyConditionExpression=Key("PK").eq(tpk(org_id)) & Key("SK").begins_with(MEMBER_PREFIX),
+        FilterExpression=Attr("email").eq(email), ConsistentRead=True)
+    return resp["Items"][0] if resp["Items"] else None
 
 
 def query_page(org_id: str, prefix: str, limit: int, cursor: str | None) -> dict:
@@ -127,6 +159,17 @@ def build_update(fields: dict[str, Any]):
     if removes:
         parts.append("REMOVE " + ", ".join(removes))
     return " ".join(parts), names, values
+
+
+_TOKEN = re.compile(r"[#:][A-Za-z0-9_]+")
+
+
+def used_only(text: str, names: dict, values: dict):
+    """DynamoDB rejects expression names/values that the expression does not
+    use. Keep only the ones that appear in `text`."""
+    tokens = set(_TOKEN.findall(text))
+    return ({k: v for k, v in names.items() if k in tokens},
+            {k: v for k, v in values.items() if k in tokens})
 
 
 # --------------------------------------------------------------------------

@@ -32,7 +32,6 @@ app.include_router(tasks.router)
 # --------------------------------------------------------------------------
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
-    # Report field names and messages only. Never echo the submitted values.
     errors = [
         {"field": ".".join(str(part) for part in e["loc"] if part != "body"),
          "message": e["msg"]}
@@ -47,8 +46,6 @@ async def aws_error_handler(request: Request, exc: ClientError):
     logger.error("aws_error", extra={"error_code": exc.response["Error"]["Code"],
                                      "operation": exc.operation_name})
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-
-
 # --------------------------------------------------------------------------
 # Request logging and response headers
 # --------------------------------------------------------------------------

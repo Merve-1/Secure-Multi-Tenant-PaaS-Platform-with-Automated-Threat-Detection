@@ -19,10 +19,11 @@ def test_admin_can_do_everything_listed():
         assert allows("admin", permission)
 
 
-def test_member_can_write_but_not_delete_or_manage():
-    for permission in ("project.read", "project.write", "task.read", "task.write"):
+def test_member_works_on_own_tasks_but_not_others_or_management():
+    for permission in ("project.read", "project.write", "task.read", "task.create",
+                       "task.write_own", "task.delete_own"):
         assert allows("member", permission)
-    for permission in ("project.delete", "task.delete", "member.manage",
+    for permission in ("project.delete", "task.write", "task.delete", "member.manage",
                        "org.update", "org.delete", "review"):
         assert not allows("member", permission)
 
@@ -30,8 +31,9 @@ def test_member_can_write_but_not_delete_or_manage():
 def test_reviewer_reads_and_reviews_but_never_writes():
     for permission in ("org.read", "project.read", "task.read", "review"):
         assert allows("reviewer", permission)
-    for permission in ("project.write", "project.delete", "task.write",
-                       "task.delete", "member.manage", "org.update"):
+    for permission in ("project.write", "project.delete", "task.create", "task.write",
+                       "task.delete", "task.write_own", "task.delete_own",
+                       "member.manage", "org.update"):
         assert not allows("reviewer", permission)
 
 

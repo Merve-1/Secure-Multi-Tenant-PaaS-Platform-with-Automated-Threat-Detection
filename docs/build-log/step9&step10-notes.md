@@ -1,0 +1,2 @@
+- Tenant-scoped tasks, conditional writes, ownership checks before update/delete
+- Approval workflow state machine (Draft → Submitted → Approved/Changes Requested), reviewer-only transitions, comments

@@ -17,13 +17,15 @@ PERMISSIONS: dict[str, frozenset[str]] = {
         "org.read", "org.update", "org.delete",
         "member.read", "member.manage",
         "project.read", "project.write", "project.delete",
-        "task.read", "task.write", "task.delete",
-        "review",
+        "task.read", "task.create", "task.write", "task.delete",
+        "review", "approval.reopen",
     }),
     "member": frozenset({
         "org.read", "member.read",
         "project.read", "project.write",
-        "task.read", "task.write",
+        # Tasks: members work on their own tasks (created by them or assigned to
+        # them). "task.write" / "task.delete" without _own would mean ANY task.
+        "task.read", "task.create", "task.write_own", "task.delete_own",
     }),
     "reviewer": frozenset({
         "org.read", "member.read",
