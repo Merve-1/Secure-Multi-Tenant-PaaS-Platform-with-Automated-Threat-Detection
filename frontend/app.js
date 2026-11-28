@@ -26,10 +26,31 @@
   ];
   const STATUS_LABEL = Object.fromEntries(STATUSES);
 
+  const APPROVAL_LABEL = {
+    draft: 'Draft',
+    submitted: 'Pending review',
+    approved: 'Approved',
+    changes_requested: 'Changes requested',
+  };
+  const ACTION_LABEL = {
+    submit: 'Submit for review',
+    withdraw: 'Withdraw',
+    approve: 'Approve',
+    request_changes: 'Request changes',
+    reopen: 'Reopen',
+  };
+  const ACTION_PATH = {
+    submit: 'submit',
+    withdraw: 'withdraw',
+    approve: 'approve',
+    request_changes: 'request-changes',
+    reopen: 'reopen',
+  };
+
   let config;
   let session;
   let route = 'overview';
-  let data = { orgs: [], org: null, members: [], projects: [], tasks: [] };
+  let data = { orgs: [], org: null, members: [], projects: [], tasks: [], pending: [] };
   let filters = { search: '', project: '' };
 
 
@@ -235,6 +256,7 @@
     data.members = [];
     data.projects = [];
     data.tasks = [];
+    data.pending = [];
 
     if (!data.org) {
       return;
@@ -249,14 +271,12 @@
       data.projects.map(project => fetchAll(`${base}/projects/${project.id}/tasks`))
     );
     data.tasks = perProject.flat();
+    data.pending = await fetchAll(`${base}/approvals`);
   }
 
   async function refresh() {
     await loadData();
-    const roleLabel = document.querySelector('.user small');
-    if (roleLabel) {
-      roleLabel.textContent = myRole() || 'no organization';
-    }
+    app.innerHTML = '';
     render();
   }
 
@@ -289,7 +309,9 @@
 
   function navButton(key, label, icon) {
     const active = route === key ? ' on' : '';
-    return `<button class="nav${active}" data-route="${key}"><i>${icon}</i>${label}</button>`;
+    const count = key === 'approvals' ? data.pending.length : 0;
+    const badge = count ? `<span class="badge">${count}</span>` : '';
+    return `<button class="nav${active}" data-route="${key}"><i>${icon}</i>${label}${badge}</button>`;
   }
 
   function disabledNav(label, icon) {
@@ -312,7 +334,7 @@
           ${navButton('organizations', 'Organizations', '▦')}
           ${navButton('projects', 'Projects', '▤')}
           ${navButton('tasks', 'Tasks', '✓')}
-          ${disabledNav('Approvals', '◷')}
+          ${navButton('approvals', 'Approvals', '◷')}
 
           <div class="label">SECURITY &amp; GOVERNANCE</div>
           ${disabledNav('Security incidents', '~')}
@@ -473,7 +495,7 @@
   }
 
   function statusControl(task) {
-    if (!can('write')) {
+    if (!task.can_edit) {
       return `<span class="pill">${STATUS_LABEL[task.status]}</span>`;
     }
 
@@ -485,24 +507,37 @@
     return `<select data-status="${task.project_id}|${task.id}">${options}</select>`;
   }
 
+  function approvalButtons(task) {
+    return (task.allowed_actions || []).map(action => `
+      <button class="btn ghost small" data-approval="${task.project_id}|${task.id}|${action}">${ACTION_LABEL[action]}</button>`
+    ).join('');
+  }
+
   function taskCard(task) {
-    const deleteButton = can('delete')
-      ? `<button class="btn ghost" data-delete="${task.project_id}|${task.id}">Delete</button>`
+    const state = task.approval_state || 'draft';
+    const stateClass = state === 'approved' ? 'pill ok' : 'pill';
+    const deleteButton = task.can_delete
+      ? `<button class="btn ghost small" data-delete="${task.project_id}|${task.id}">Delete</button>`
+      : '';
+    const decision = task.decision_comment
+      ? `<p class="mute">“${esc(task.decision_comment)}”</p>`
       : '';
 
     return `
       <div class="card task-card">
         <b>${esc(task.title)}</b>
         <p class="mute">${esc(task.description || '')}</p>
+        ${decision}
         <div class="split">
           <span class="pill">${esc(projectName(task.project_id))}</span>
           <span class="av small" title="${esc(task.owner || '')}">${esc(initials(task.owner))}</span>
         </div>
-        <div class="split task-foot">
-          <small>${esc(task.due_date || 'No due date')}</small>
+        <div class="split">
+          <span class="${stateClass}">${APPROVAL_LABEL[state]}</span>
           ${statusControl(task)}
         </div>
-        ${deleteButton}
+        <small class="mute">${esc(task.due_date || 'No due date')}</small>
+        <div class="task-actions">${approvalButtons(task)}${deleteButton}</div>
       </div>`;
   }
 
@@ -548,6 +583,29 @@
       </div>
 
       <div class="board">${columns}</div>`;
+  }
+
+  function viewApprovals() {
+    const rows = data.pending.map(item => {
+      const task = data.tasks.find(t => t.id === item.task_id);
+      const actions = task ? approvalButtons(task) : '';
+      const note = item.note ? ` · ${esc(item.note)}` : '';
+      return `
+        <li>
+          <span>${esc(item.title)}
+            <small>${esc(projectName(item.project_id))} · submitted by ${esc(item.submitted_by_email)} · ${esc(item.submitted_at.slice(0, 10))}${note}</small>
+          </span>
+          <span class="task-actions">${actions}</span>
+        </li>`;
+    }).join('');
+
+    return `
+      ${pageHead('APPROVAL WORKFLOWS', 'Approval workflows', 'Review and manage submitted work.')}
+      <div class="card">
+        ${rows
+          ? `<ul class="rows">${rows}</ul>`
+          : '<p class="empty">No pending approvals. All caught up.</p>'}
+      </div>`;
   }
 
   function viewNoOrganization() {
@@ -650,6 +708,7 @@
       projects: viewProjects,
       tasks: viewTasks,
       organizations: viewOrganizations,
+      approvals: viewApprovals,
     };
     const view = data.org ? views[route] : viewNoOrganization;
     document.getElementById('main').innerHTML = view();
@@ -801,6 +860,23 @@
     await refresh();
   }
 
+  async function runApproval(key) {
+    const [projectId, taskId, action] = key.split('|');
+    let body;
+
+    if (action === 'request_changes') {
+      const comment = prompt('What should the author change?');
+      if (!comment || !comment.trim()) {
+        return;
+      }
+      body = { comment: comment.trim() };
+    }
+
+    const path = `${orgPath()}/projects/${projectId}/tasks/${taskId}/${ACTION_PATH[action]}`;
+    await api('POST', path, body);
+    await refresh();
+  }
+
   async function deleteTask(key) {
     const [projectId, taskId] = key.split('|');
     await api('DELETE', `${orgPath()}/projects/${projectId}/tasks/${taskId}`);
@@ -847,6 +923,12 @@
       if (confirm('Delete this task?')) {
         run(() => deleteTask(deleteButton.dataset.delete));
       }
+      return;
+    }
+
+    const approvalButton = event.target.closest('[data-approval]');
+    if (approvalButton) {
+      run(() => runApproval(approvalButton.dataset.approval));
       return;
     }
 
@@ -935,7 +1017,7 @@
 
   async function start() {
     const hash = location.hash.slice(1);
-    if (['overview', 'organizations', 'projects', 'tasks'].includes(hash)) {
+    if (['overview', 'organizations', 'approvals', 'projects', 'tasks'].includes(hash)) {
       route = hash;
     }
 

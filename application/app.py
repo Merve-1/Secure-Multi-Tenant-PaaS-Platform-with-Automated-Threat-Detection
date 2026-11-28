@@ -14,7 +14,7 @@ from mangum import Mangum
 
 from core.auth import CallerDep
 from core.log import logger
-from routers import orgs, projects, tasks
+from routers import orgs, projects, tasks, approvals
 
 app = FastAPI(
     title="Multi-Tenant SaaS API",
@@ -25,7 +25,7 @@ app = FastAPI(
 app.include_router(orgs.router)
 app.include_router(projects.router)
 app.include_router(tasks.router)
-
+app.include_router(approvals.router)
 
 # --------------------------------------------------------------------------
 # Error handling

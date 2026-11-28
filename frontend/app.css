@@ -661,6 +661,38 @@ dialog .btn[type="submit"] {
   width: 100%;
 }
 
+/* ==========================================================================
+   Approvals
+   ========================================================================== */
+
+.badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f4ecc9;
+  color: #5b4f1b;
+  font-size: 11px;
+  text-align: center;
+}
+
+.btn.small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.task-actions:empty {
+  display: none;
+}
+
+
 
 /* ==========================================================================
    Responsive (max-width: 860px)

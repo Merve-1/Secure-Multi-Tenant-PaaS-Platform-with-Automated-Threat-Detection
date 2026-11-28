@@ -1,14 +1,17 @@
 """Tasks, scoped to a project in an organization:
 /orgs/{org_id}/projects/{project_id}/tasks
 
-Isolation and ownership rules:
+Isolation, ownership and locking rules:
   * Every key is built from the verified organization (m.org_id), so a task of
     another organization cannot be reached whatever IDs the client sends.
-  * Admins may change or delete any task. Members may only change or delete the
-    tasks they created or are assigned to. Reviewers may only read.
-  * The ownership rule is checked in the handler (clean 403) AND repeated inside
-    the write's ConditionExpression, so a task that changed hands between the
-    read and the write cannot be modified by its previous owner.
+  * Admins may change or delete any task. Members only the tasks they created or
+    are assigned to. Reviewers may only read.
+  * A task that is submitted or approved is LOCKED: no edit, no delete. Reviewers
+    always decide on exactly what was submitted. (Workflow endpoints live in
+    routers/approvals.py.)
+  * Ownership and the lock are checked in the handler (clean 403/409) AND
+    repeated inside the write's ConditionExpression, so a race between the read
+    and the write cannot bypass them.
   * A task's owner must be an email address of a member of the organization.
   * Every write carries its audit event in the same transaction.
 """
@@ -20,17 +23,19 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, model_validator
 
 from core.auth import Member, Membership, can_modify_task, require, require_task_access
-from core.db import (build_update, find_member_by_email, get_item, get_project_or_404,
-                     now, query_page, run_tx, task_key, task_prefix, tx_audit, tx_delete,
-                     tx_put, tx_update)
+from core.db import (build_update, find_member_by_email, get_project_or_404,
+                     get_task_or_404, now, query_page, run_tx, task_key, task_prefix,
+                     tx_audit, tx_delete, tx_put, tx_update)
+from core.guards import own_guard, unlocked_guard
 from core.log import log_event
-from core.permissions import allows
 from core.schemas import Cursor, Limit, ProjectId, StrictModel, TaskId
+from core.workflow import ApprovalState, available_actions, current_state, is_locked
 
 router = APIRouter(prefix="/orgs/{org_id}/projects/{project_id}/tasks", tags=["tasks"])
 
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-CHANGED_HANDS = "Task changed or is no longer yours. Reload and retry."
+CHANGED_HANDS = "Task changed, is locked, or is no longer yours. Reload and retry."
+LOCKED = "Task is locked while it is submitted or approved"
 
 
 class TaskStatus(str, Enum):
@@ -75,10 +80,18 @@ class TaskOut(BaseModel):
     created_by: str
     created_at: str
     updated_at: str
+    # Approval workflow (changed only through routers/approvals.py)
+    approval_state: ApprovalState = ApprovalState.draft
+    submitted_by_email: str | None = None
+    submitted_at: str | None = None
+    decided_by_email: str | None = None
+    decided_at: str | None = None
+    decision_comment: str | None = None
     # What the CALLER may do with this task, computed by the server so the
     # frontend never has to re-implement the rules.
     can_edit: bool = False
     can_delete: bool = False
+    allowed_actions: list[str] = []
 
 
 class TaskList(BaseModel):
@@ -89,17 +102,12 @@ class TaskList(BaseModel):
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
-def get_task_or_404(org_id: str, project_id: str, task_id: str) -> dict:
-    item = get_item(task_key(org_id, project_id, task_id))
-    if not item:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return item
-
-
 def task_out(m: Membership, item: dict) -> TaskOut:
+    unlocked = not is_locked(current_state(item))
     return TaskOut(**item,
-                   can_edit=can_modify_task(m, item, "write"),
-                   can_delete=can_modify_task(m, item, "delete"))
+                   can_edit=unlocked and can_modify_task(m, item, "write"),
+                   can_delete=unlocked and can_modify_task(m, item, "delete"),
+                   allowed_actions=available_actions(m, item))
 
 
 def resolve_owner(org_id: str, email: str) -> str:
@@ -110,17 +118,6 @@ def resolve_owner(org_id: str, email: str) -> str:
         raise HTTPException(status_code=422,
                             detail="Owner must be the email of a member of this organization")
     return owner
-
-
-def own_guard(m: Membership, action: str, values: dict, names: dict) -> str:
-    """Condition fragment that repeats the ownership rule inside the write itself.
-    Roles with the unrestricted permission (admin) need no extra condition."""
-    if allows(m.role, f"task.{action}"):
-        return ""
-    values[":me"] = m.caller.user_id
-    values[":email"] = m.caller.email
-    names["#own"] = "owner"
-    return " AND (created_by = :me OR #own = :email)"
 
 
 # --------------------------------------------------------------------------
@@ -142,6 +139,7 @@ def create_task(project_id: ProjectId, body: TaskCreate, m: Member):
         "entity_type": "task",
         "id": task_id,
         "project_id": pid,
+        "approval_state": ApprovalState.draft.value,
         "created_by": m.caller.user_id,
         "created_at": ts,
         "updated_at": ts,
@@ -174,13 +172,16 @@ def update_task(project_id: ProjectId, task_id: TaskId, body: TaskUpdate, m: Mem
     pid, tid = str(project_id), str(task_id)
     task = get_task_or_404(m.org_id, pid, tid)
     require_task_access(m, task, "write")  # ownership check BEFORE the write
+    if is_locked(current_state(task)):
+        raise HTTPException(status_code=409, detail=LOCKED)
     fields = body.model_dump(mode="json", exclude_unset=True)
     if fields.get("owner"):
         fields["owner"] = resolve_owner(m.org_id, fields["owner"])
     changed = sorted(fields)
     fields["updated_at"] = now()
     expression, names, values = build_update(fields)
-    condition = "attribute_exists(PK)" + own_guard(m, "write", values, names)
+    condition = ("attribute_exists(PK)" + own_guard(m, "write", values, names)
+                 + unlocked_guard(values, names))
     run_tx([
         tx_update(task_key(m.org_id, pid, tid), expression, condition, values, names),
         tx_audit(m.org_id, m.caller.user_id, "task.update", tid, project_id=pid, changed=changed),
@@ -195,11 +196,14 @@ def delete_task(project_id: ProjectId, task_id: TaskId, m: Member):
     pid, tid = str(project_id), str(task_id)
     task = get_task_or_404(m.org_id, pid, tid)
     require_task_access(m, task, "delete")  # ownership check BEFORE the delete
+    if is_locked(current_state(task)):
+        raise HTTPException(status_code=409, detail=LOCKED)
     values: dict = {}
     names: dict = {}
-    condition = "attribute_exists(PK)" + own_guard(m, "delete", values, names)
+    condition = ("attribute_exists(PK)" + own_guard(m, "delete", values, names)
+                 + unlocked_guard(values, names))
     run_tx([
-        tx_delete(task_key(m.org_id, pid, tid), condition, values or None, names or None),
+        tx_delete(task_key(m.org_id, pid, tid), condition, values, names),
         tx_audit(m.org_id, m.caller.user_id, "task.delete", tid, project_id=pid),
     ], {0: (409, CHANGED_HANDS)})
     log_event("task.delete", m.org_id, m.caller.user_id, resource_id=tid, project_id=pid)
